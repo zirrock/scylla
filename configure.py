@@ -1198,6 +1198,7 @@ seastar_ldflags = args.user_ldflags
 
 libdeflate_cflags = seastar_cflags
 zstd_cflags = seastar_cflags + ' -Wno-implicit-fallthrough'
+avro_cflags = seastar_cflags
 
 MODE_TO_CMAKE_BUILD_TYPE = {'release' : 'RelWithDebInfo', 'debug' : 'Debug', 'dev' : 'Dev', 'sanitize' : 'Sanitize' }
 
@@ -1283,6 +1284,23 @@ def configure_zstd(build_dir, mode):
     os.makedirs(zstd_build_dir, exist_ok=True)
     subprocess.check_call(zstd_cmd, shell=False, cwd=zstd_build_dir)
 
+def configure_avro(build_dir, mode):
+    avro_build_dir = os.path.join(build_dir, mode, 'avro')
+
+    avro_cmake_args = [
+        '-DCMAKE_BUILD_TYPE={}'.format(MODE_TO_CMAKE_BUILD_TYPE[mode]),
+        '-DCMAKE_C_COMPILER={}'.format(args.cc),
+        '-DCMAKE_CXX_COMPILER={}'.format(args.cxx),
+        '-DCMAKE_C_FLAGS={}'.format(avro_cflags)
+    ]
+
+    avro_cmd = ['cmake', '-G', 'Ninja', os.path.relpath('avro/lang/c++', avro_build_dir)] + avro_cmake_args
+
+    print(avro_cmd)
+    os.makedirs(avro_build_dir, exist_ok=True)
+    subprocess.check_call(avro_cmd, shell=False, cwd=avro_build_dir)
+
+
 args.user_cflags += " " + pkg_config('jsoncpp', '--cflags')
 args.user_cflags += ' -march=' + args.target
 libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-llz4', '-lz', '-lsnappy', pkg_config('jsoncpp', '--libs'),
@@ -1340,6 +1358,7 @@ else:
 
 for mode in build_modes:
     configure_zstd(outdir, mode)
+    configure_avro(outdir, mode)
 
 # configure.py may run automatically from an already-existing build.ninja.
 # If the user interrupts configure.py in the middle, we need build.ninja
@@ -1478,6 +1497,7 @@ with open(buildfile_tmp, 'w') as f:
                 objs.extend(['$builddir/' + mode + '/' + artifact for artifact in [
                     'libdeflate/libdeflate.a',
                     'zstd/lib/libzstd.a',
+                    'avro/libavrocpp_s.a',
                 ]])
                 objs.append('$builddir/' + mode + '/gen/utils/gz/crc_combine_table.o')
                 if binary in tests:
@@ -1630,6 +1650,10 @@ with open(buildfile_tmp, 'w') as f:
         f.write('  pool = submodule_pool\n')
         f.write('  subdir = build/{mode}/zstd\n'.format(**locals()))
         f.write('  target = libzstd.a\n'.format(**locals()))
+        f.write('build build/{mode}/avro/libavrocpp_s.a: ninja\n'.format(**locals()))
+        f.write('  pool = submodule_pool\n')
+        f.write('  subdir = build/{mode}/avro\n'.format(**locals()))
+        f.write('  target = avrocpp_s\n'.format(**locals()))
 
     mode = 'dev' if 'dev' in modes else modes[0]
     f.write('build checkheaders: phony || {}\n'.format(' '.join(['$builddir/{}/{}.o'.format(mode, hh) for hh in headers])))
