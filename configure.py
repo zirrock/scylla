@@ -270,6 +270,7 @@ scylla_tests = set([
     'test/boost/aggregate_fcts_test',
     'test/boost/allocation_strategy_test',
     'test/boost/anchorless_list_test',
+    'test/boost/avro_test',
     'test/boost/auth_passwords_test',
     'test/boost/auth_resource_test',
     'test/boost/auth_test',
@@ -909,6 +910,7 @@ deps = {
 
 pure_boost_tests = set([
     'test/boost/anchorless_list_test',
+    'test/boost/avro_test',
     'test/boost/auth_passwords_test',
     'test/boost/auth_resource_test',
     'test/boost/big_decimal_test',
@@ -994,6 +996,7 @@ deps['test/boost/murmur_hash_test'] = ['bytes.cc', 'utils/murmur_hash.cc', 'test
 deps['test/boost/allocation_strategy_test'] = ['test/boost/allocation_strategy_test.cc', 'utils/logalloc.cc', 'utils/dynamic_bitset.cc']
 deps['test/boost/log_heap_test'] = ['test/boost/log_heap_test.cc']
 deps['test/boost/anchorless_list_test'] = ['test/boost/anchorless_list_test.cc']
+deps['test/boost/avro_test'] = ['test/boost/avro_test.cc']
 deps['test/perf/perf_fast_forward'] += ['release.cc']
 deps['test/perf/perf_simple_query'] += ['release.cc']
 deps['test/boost/meta_test'] = ['test/boost/meta_test.cc']
