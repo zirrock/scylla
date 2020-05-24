@@ -21,10 +21,20 @@
 
 #pragma once
 
+#include <map>
+#include <chrono>
+
 #include <seastar/core/seastar.hh>
 #include <seastar/core/timer.hh>
 
+#include "utils/UUID.hh"
 #include "service/storage_proxy.hh"
+
+class schema;
+class schema_extension;
+
+using schema_ptr = seastar::lw_shared_ptr<const schema>;
+using timeuuid = utils::UUID;
 
 namespace cdc::kafka {
 
@@ -32,12 +42,9 @@ class kafka_upload_service final {
     service::storage_proxy& _proxy;
     timer<seastar::lowres_clock> _timer;
 
-    void on_timer() {
-        arm_timer();
+    std::map<std::pair<sstring, sstring>, timeuuid> _last_seen_row_key;
 
-        // Logic goes here. Remember to wait for it to finish in
-        // kafka_upload_service::stop
-    }
+    void on_timer();
 
     void arm_timer() {
         _timer.arm(seastar::lowres_clock::now() + std::chrono::seconds(10));
