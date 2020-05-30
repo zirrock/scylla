@@ -874,12 +874,6 @@ int main(int ac, char** av) {
                 cdc.stop().get();
             });
 
-            static sharded<cdc::kafka::kafka_upload_service> kafka_upload_service;
-            kafka_upload_service.start(std::ref(proxy), std::ref(auth_service)).get();
-            auto stop_kafka_upload_service = defer_verbose_shutdown("kafka_upload_service", [] {
-                kafka_upload_service.stop().get();
-            });
-
             supervisor::notify("loading non-system sstables");
             distributed_loader::init_non_system_keyspaces(db, proxy, mm).get();
 
@@ -1146,6 +1140,12 @@ int main(int ac, char** av) {
 
                 ss.register_client_shutdown_hook("alternator", std::move(stop_alternator));
             }
+
+            static sharded<cdc::kafka::kafka_upload_service> kafka_upload_service;
+            kafka_upload_service.start(std::ref(proxy), std::ref(auth_service)).get();
+            auto stop_kafka_upload_service = defer_verbose_shutdown("kafka_upload_service", [] {
+                kafka_upload_service.stop().get();
+            });
 
             static redis_service redis;
             if (cfg->redis_port() || cfg->redis_ssl_port()) {
