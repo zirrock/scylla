@@ -875,7 +875,7 @@ int main(int ac, char** av) {
             });
 
             static sharded<cdc::kafka::kafka_upload_service> kafka_upload_service;
-            kafka_upload_service.start(std::ref(proxy)).get();
+            kafka_upload_service.start(std::ref(proxy), std::ref(auth_service)).get();
             auto stop_kafka_upload_service = defer_verbose_shutdown("kafka_upload_service", [] {
                 kafka_upload_service.stop().get();
             });

@@ -29,6 +29,9 @@
 
 #include "utils/UUID.hh"
 #include "service/storage_proxy.hh"
+#include "service/client_state.hh"
+
+#include "cql3/untyped_result_set.hh"
 
 class schema;
 class schema_extension;
@@ -43,6 +46,8 @@ using seastar::sstring;
 class kafka_upload_service final {
     service::storage_proxy& _proxy;
     timer<seastar::lowres_clock> _timer;
+    auth::service& _auth_service;
+    service::client_state _client_state;
 
     std::map<std::pair<sstring, sstring>, timeuuid> _last_seen_row_key;
 
@@ -58,14 +63,19 @@ class kafka_upload_service final {
 
     sstring compose_avro_schema(sstring avro_name, sstring avro_namespace, sstring avro_fields);
 
+    void select(std::vector<schema_ptr> &tables);
+
+    void convert(schema_ptr schema, const cql3::untyped_result_set_row &row);
 
     void arm_timer() {
         _timer.arm(seastar::lowres_clock::now() + std::chrono::seconds(10));
     }
 public:
-    kafka_upload_service(service::storage_proxy& proxy)
+    kafka_upload_service(service::storage_proxy& proxy, auth::service& auth_service)
         : _proxy(proxy)
         , _timer([this] { on_timer(); })
+        , _auth_service(auth_service)
+        , _client_state(service::client_state::external_tag{}, _auth_service)
     {
         _proxy.set_kafka_upload_service(this);
         arm_timer();

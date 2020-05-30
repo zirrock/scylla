@@ -23,9 +23,21 @@
 #include <set>
 #include "kafka_upload_service.hh"
 
+#include "avro/lang/c++/api/Compiler.hh"
+#include "avro/lang/c++/api/Encoder.hh"
+#include "avro/lang/c++/api/Decoder.hh"
+#include "avro/lang/c++/api/Specific.hh"
+#include "avro/lang/c++/api/Generic.hh"
+
+#include "cql3/column_specification.hh"
+#include "cql3/column_identifier.hh"
+#include "cql3/selection/selection.hh"
+#include "cql3/result_set.hh"
+
 namespace cdc::kafka {
 
 using seastar::sstring;
+using namespace std::chrono_literals;
 
 std::vector<schema_ptr> get_tables_with_cdc_enabled() {
     return std::vector<schema_ptr>();
@@ -65,6 +77,7 @@ void kafka_upload_service::on_timer() {
         auto last_seen = _last_seen_row_key[entry];
         _last_seen_row_key[entry] = do_kafka_replicate(table, last_seen);
     }
+    select(tables_with_cdc_enabled);
 }
 
 sstring kafka_upload_service::kind_to_avro_type(abstract_type::kind kind) {
@@ -179,5 +192,81 @@ sstring kafka_upload_service::compose_avro_schema(sstring avro_name, sstring avr
                                  "}");
         return result;
  }
+
+void kafka_upload_service::select(std::vector<schema_ptr> &tables) {
+    for (auto &table : tables) {
+        auto key = std::make_pair<sstring, sstring> (sstring(table->ks_name()), sstring(table->cf_name()));
+        auto last_seen_key = _last_seen_row_key.at(key);
+        std::vector<query::clustering_range> bounds;
+        auto ckp = clustering_key_prefix::from_single_value(*table, timeuuid_type->decompose(last_seen_key));
+        auto b = range_bound(ckp, false);
+        bounds.push_back(query::clustering_range::make_starting_with(b));
+        auto selection = cql3::selection::selection::wildcard(table);
+        auto opts = selection->get_query_options();
+        auto partition_slice = query::partition_slice(std::move(bounds), *table, column_set(), opts);
+        // db::timeout_clock::time_point timeout = db::timeout_clock::now + 10s;
+        auto timeout = seastar::lowres_clock::now() + std::chrono::seconds(10);
+        auto command = make_lw_shared<query::read_command> (
+            table->id(),
+            table->version(),
+            partition_slice);
+        dht::partition_range_vector partition_ranges;
+        partition_ranges.push_back(query::full_partition_range);
+        try {
+        auto results = _proxy.query(
+            table, 
+            command, 
+            std::move(partition_ranges), 
+            db::consistency_level::QUORUM,
+            service::storage_proxy::coordinator_query_options(
+                timeout,
+                empty_service_permit(),
+                _client_state
+            )).then([table = table, partition_slice = std::move(partition_slice), selection = std::move(selection)] 
+            (service::storage_proxy::coordinator_query_result qr) -> lw_shared_ptr<cql3::untyped_result_set> {
+                cql3::selection::result_set_builder builder(*selection, gc_clock::now(), cql_serialization_format::latest());
+                query::result_view::consume(*qr.query_result, partition_slice, cql3::selection::result_set_builder::visitor(builder, *table, *selection));
+                auto result_set = builder.build();
+                if (!result_set || result_set->empty()) {
+                    return {};
+                }
+                return make_lw_shared<cql3::untyped_result_set>(*result_set);
+            }).then([this, table](lw_shared_ptr<cql3::untyped_result_set> results){
+           for (auto &row : *results) {
+                convert(table, row);
+            }
+        });
+        } catch (exceptions::unavailable_exception &e) {
+            // handle it
+        }
+    }
+}
+
+void kafka_upload_service::convert(schema_ptr schema, const cql3::untyped_result_set_row &row) {
+    auto avro_schema = compose_value_schema_for(schema);
+    std::istringstream ifs(avro_schema);
+    avro::ValidSchema compiledSchema;
+    avro::compileJsonSchema(ifs, compiledSchema);
+    avro::OutputStreamPtr out = avro::memoryOutputStream();
+    avro::EncoderPtr e = avro::binaryEncoder();
+    e->init(*out);
+    avro::GenericDatum datum(compiledSchema);
+    if (datum.type() == avro::AVRO_RECORD) {
+        avro::GenericRecord &record = datum.value<avro::GenericRecord>();
+        auto columns = row.get_columns();
+        for (auto &column : columns) {
+            auto name = column->name->to_string();
+            auto value = row.get_opt<bytes>(name);
+            if (value) {
+                record.field(name).value<bytes>() = value.value();
+            }
+        }
+    }
+    avro::encode(*e,datum);
+    uint8_t* tmp;
+    size_t length;
+    out->next(&tmp, &length);
+    std::cout << tmp;
+}
 
 } // namespace cdc::kafka
