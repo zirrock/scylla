@@ -67,6 +67,8 @@ class kafka_upload_service final {
 
     void convert(schema_ptr schema, const cql3::untyped_result_set_row &row);
 
+    std::vector<schema_ptr> get_tables_with_cdc_enabled();
+
     void arm_timer() {
         _timer.arm(seastar::lowres_clock::now() + std::chrono::seconds(10));
     }
