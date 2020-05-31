@@ -21,14 +21,26 @@
 
 #include <vector>
 #include <set>
+
+#include "database.hh"
 #include "kafka_upload_service.hh"
 
 namespace cdc::kafka {
 
 using seastar::sstring;
 
-std::vector<schema_ptr> get_tables_with_cdc_enabled() {
-    return std::vector<schema_ptr>();
+std::vector<schema_ptr> kafka_upload_service::get_tables_with_cdc_enabled() {
+    auto tables = _proxy.get_db().local().get_column_families();
+
+    std::vector<schema_ptr> tables_with_cdc;
+    for (auto& [id, table] : tables) {
+        auto schema = table->schema();
+        if (schema->cdc_options().enabled()) {
+            tables_with_cdc.push_back(schema);
+        }
+    }
+
+    return tables_with_cdc;
 }
 
 timeuuid do_kafka_replicate(schema_ptr table_schema, timeuuid last_seen) {
@@ -70,62 +82,44 @@ void kafka_upload_service::on_timer() {
 sstring kafka_upload_service::kind_to_avro_type(abstract_type::kind kind) {
     switch (kind) {
         //TODO: Complex types + Check if all kinds are translated into appropriate avro types
-        case abstract_type::kind::ascii:
-            return sstring("string");
         case abstract_type::kind::boolean:
             return sstring("boolean");
-        case abstract_type::kind::byte:
-            return sstring("string");
-        case abstract_type::kind::bytes:
-            return sstring("string");
+
         case abstract_type::kind::counter:
-            return sstring("long");
-        case abstract_type::kind::date:
-            return sstring("string");
-        case abstract_type::kind::decimal:
-            return sstring("float");
-        case abstract_type::kind::double_kind:
-            return sstring("double");
-        case abstract_type::kind::duration:
-            return sstring("string");
-        case abstract_type::kind::empty:
-            return sstring("string");
-        case abstract_type::kind::float_kind:
-            return sstring("float");
-        case abstract_type::kind::inet:
-            return sstring("string");
-        case abstract_type::kind::int32:
-            return sstring("int");
-        case abstract_type::kind::list:
-            return sstring("string");
         case abstract_type::kind::long_kind:
             return sstring("long");
-        case abstract_type::kind::map:
-            return sstring("string");
-        case abstract_type::kind::reversed:
-            return sstring("string");
-        case abstract_type::kind::set:
-            return sstring("string");
+
+        case abstract_type::kind::decimal:
+        case abstract_type::kind::float_kind:
+            return sstring("float");
+
+        case abstract_type::kind::double_kind:
+            return sstring("double");
+
+        case abstract_type::kind::int32:
         case abstract_type::kind::short_kind:
             return sstring("int");
+
+        case abstract_type::kind::ascii:
+        case abstract_type::kind::byte:
+        case abstract_type::kind::bytes:
+        case abstract_type::kind::date:
+        case abstract_type::kind::duration:
+        case abstract_type::kind::empty:
+        case abstract_type::kind::inet:
+        case abstract_type::kind::list:
+        case abstract_type::kind::map:
+        case abstract_type::kind::reversed:
+        case abstract_type::kind::set:
         case abstract_type::kind::simple_date:
-            return sstring("string");
         case abstract_type::kind::time:
-            return sstring("string");
         case abstract_type::kind::timestamp:
-            return sstring("string");
         case abstract_type::kind::timeuuid:
-            return sstring("string");
         case abstract_type::kind::tuple:
-            return sstring("string");
         case abstract_type::kind::user:
-            return sstring("string");
         case abstract_type::kind::utf8:
-            return sstring("string");
         case abstract_type::kind::uuid:
-            return sstring("string");
         case abstract_type::kind::varint:
-            return sstring("string");
         default:
             return sstring("string");
     }
