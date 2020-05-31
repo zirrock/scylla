@@ -58,6 +58,8 @@ class kafka_upload_service final {
 
     sstring compose_avro_schema(sstring avro_name, sstring avro_namespace, sstring avro_fields);
 
+    std::vector<schema_ptr> get_tables_with_cdc_enabled();
+
 
     void arm_timer() {
         _timer.arm(seastar::lowres_clock::now() + std::chrono::seconds(10));
