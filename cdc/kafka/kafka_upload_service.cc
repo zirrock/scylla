@@ -203,8 +203,15 @@ void kafka_upload_service::select(schema_ptr table, timeuuid last_seen_key) {
     auto b = range_bound(ckp, false);
     bounds.push_back(query::clustering_range::make_starting_with(b));
     auto selection = cql3::selection::selection::wildcard(table);
+    query::column_id_vector static_columns, regular_columns;
+    for (const column_definition& c : table->static_columns()) {
+        static_columns.emplace_back(c.id);
+    }
+    for (const column_definition& c : table->regular_columns()) {
+        regular_columns.emplace_back(c.id);
+    }
     auto opts = selection->get_query_options();
-    auto partition_slice = query::partition_slice(std::move(bounds), *table, column_set(), opts);
+    auto partition_slice = query::partition_slice(std::move(bounds), std::move(static_columns), std::move(regular_columns), opts);
     // db::timeout_clock::time_point timeout = db::timeout_clock::now + 10s;
     auto timeout = seastar::lowres_clock::now() + std::chrono::seconds(10);
     auto command = make_lw_shared<query::read_command> (
@@ -231,7 +238,7 @@ void kafka_upload_service::select(schema_ptr table, timeuuid last_seen_key) {
             if (! qr.query_result) std::cout << "null in result" << std::endl;
             if (! table) std::cout << "table missing" << std::endl;
             if (! selection) std::cout << "seelction missing" << std::endl;
-            query::result_view::consume(*qr.query_result, partition_slice, cql3::selection::result_set_builder::visitor(builder, *table, *selection));
+            query::result_view::consume(*qr.query_result, std::move(partition_slice), cql3::selection::result_set_builder::visitor(builder, *table, *selection));
             std::cout << "post-consume" << std::endl;
             auto result_set = builder.build();
             if (!result_set || result_set->empty()) {
@@ -245,13 +252,15 @@ void kafka_upload_service::select(schema_ptr table, timeuuid last_seen_key) {
         }
         std::cout << "pre-convert" << std::endl;
        for (auto &row : *results) {
+            
             std::cout << "in-for-1" << std::endl;
-            auto op = row.get_opt<int>("operation");
-            if (op) {
-                if (op.value() == 2) {
+          //  auto op = row.get_opt<int>("operation");
+           // if (op) {
+           //     std::cout << "op=" << op.value() << std::endl;
+             //   if (op.value() == 2) {
                     convert(table, row);
-                }
-            }
+              //  }
+           // }
             std::cout << "in-for-2" << std::endl;
         }
         std::cout << "post-convert" << std::endl;
@@ -261,28 +270,36 @@ void kafka_upload_service::select(schema_ptr table, timeuuid last_seen_key) {
         } catch (exceptions::unavailable_exception &e) {
             std::cout << "unavailable_exception" << std::endl;
         }
-        catch (...) {
-            std::cout << "different exception" << std::endl;
-        }
+      //  catch (...) {
+      //      std::cout << "different exception" << std::endl;
+      //  }
     });
 }
 
 void kafka_upload_service::convert(schema_ptr schema, const cql3::untyped_result_set_row &row) {
     std::cout << "pre-schema" << std::endl;
-    auto avro_schema = compose_value_schema_for(schema);
-    std::istringstream ifs(avro_schema);
+    //auto avro_schema = compose_value_schema_for(schema);
+    std::ifstream ifs("schema.json");
+    //std::cout << avro_schema << std::endl;
     avro::ValidSchema compiledSchema;
     avro::compileJsonSchema(ifs, compiledSchema);
+    //avro::ValidSchema compiledSchema = avro::compileJsonSchemaFromString(avro_schema); // catch invalid schema
     avro::OutputStreamPtr out = avro::memoryOutputStream();
     avro::EncoderPtr e = avro::binaryEncoder();
     e->init(*out);
     std::cout << "post-init" << std::endl;
     avro::GenericDatum datum(compiledSchema);
+    std::cout << datum.type() << std::endl;
     if (datum.type() == avro::AVRO_RECORD) {
+        std::cout << "got-type" << std::endl;
         avro::GenericRecord &record = datum.value<avro::GenericRecord>();
+        std::cout << "got_record" << std::endl;
         auto columns = row.get_columns();
+        std::cout << "got-columns" << std::endl;
         for (auto &column : columns) {
+            std::cout << "col" << std::endl;
             auto name = column->name->to_string();
+            std::cout << name << std::endl;
             auto value = row.get_opt<bytes>(name);
             if (value) {
                 record.field(name).value<bytes>() = value.value();

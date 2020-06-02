@@ -1,0 +1,20 @@
+{
+    "type":"record",
+    "name":"value_schema",
+    "namespace":"ks.t_scylla_cdc_log",
+    "fields":[
+        {"name":"cdc",
+        "type":["null","string"]},
+        {"name":"cdc",
+        "type":["null","string"]},
+        {"name":"cdc",
+        "type":["null","int"]},
+        {"name":"cdc",
+        "type":["null","string"]},
+        {"name":"cdc",
+        "type":["null","long"]},
+        {"name":"ck","type":["null","int"]},
+        {"name":"pk",
+        "type":["null","int"]},
+        {"name":"v",
+        "type":["null","int"]}]}
