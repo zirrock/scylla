@@ -63,7 +63,7 @@ class kafka_upload_service final {
 
     sstring compose_avro_schema(sstring avro_name, sstring avro_namespace, sstring avro_fields);
 
-    void select(std::vector<schema_ptr> &tables);
+    void select(schema_ptr table, timeuuid last_seen_key);
 
     void convert(schema_ptr schema, const cql3::untyped_result_set_row &row);
 
