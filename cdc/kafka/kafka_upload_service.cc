@@ -62,13 +62,11 @@ timeuuid do_kafka_replicate(schema_ptr table_schema, timeuuid last_seen) {
 
 void kafka_upload_service::on_timer() {
     arm_timer();
-    std::cout << "entered" << std::endl;
 
     auto tables_with_cdc_enabled = get_tables_with_cdc_enabled();
     std::set<std::pair<sstring, sstring>> cdc_keyspace_table;
 
     // Remove all entries not seen in set of CDC enabled tables
-    std::cout << "got_tables" << std::endl;
     for (auto& table : tables_with_cdc_enabled) {
         cdc_keyspace_table.emplace(table->ks_name(), table->cf_name());
     }
@@ -220,7 +218,6 @@ void kafka_upload_service::select(schema_ptr table, timeuuid last_seen_key) {
         partition_slice);
     dht::partition_range_vector partition_ranges;
     partition_ranges.push_back(query::full_partition_range);
-    std::cout << "pre_query for" << last_seen_key << std::endl;
     auto results = _proxy.query(
         table, 
         command, 
@@ -232,14 +229,8 @@ void kafka_upload_service::select(schema_ptr table, timeuuid last_seen_key) {
             _client_state
         )).then([table = table, partition_slice = std::move(partition_slice), selection = std::move(selection)] 
         (service::storage_proxy::coordinator_query_result qr) -> lw_shared_ptr<cql3::untyped_result_set> {
-            std::cout << "finished_q" << std::endl;
             cql3::selection::result_set_builder builder(*selection, gc_clock::now(), cql_serialization_format::latest());
-            std::cout << "pre-consume" << std::endl;
-            if (! qr.query_result) std::cout << "null in result" << std::endl;
-            if (! table) std::cout << "table missing" << std::endl;
-            if (! selection) std::cout << "seelction missing" << std::endl;
             query::result_view::consume(*qr.query_result, std::move(partition_slice), cql3::selection::result_set_builder::visitor(builder, *table, *selection));
-            std::cout << "post-consume" << std::endl;
             auto result_set = builder.build();
             if (!result_set || result_set->empty()) {
                 return {};
@@ -250,20 +241,14 @@ void kafka_upload_service::select(schema_ptr table, timeuuid last_seen_key) {
             std::cout << "empty_query_results" << std::endl;
             return;
         }
-        std::cout << "pre-convert" << std::endl;
-       for (auto &row : *results) {
-            
-            std::cout << "in-for-1" << std::endl;
-          //  auto op = row.get_opt<int>("operation");
-           // if (op) {
-           //     std::cout << "op=" << op.value() << std::endl;
-             //   if (op.value() == 2) {
+        for (auto &row : *results) {
+            auto op = row.get_opt<int8_t>("cdc$operation");
+            if (op) {
+                if (op.value() == 2) {
                     convert(table, row);
-              //  }
-           // }
-            std::cout << "in-for-2" << std::endl;
+                }
+            }
         }
-        std::cout << "post-convert" << std::endl;
     }).handle_exception([] (std::exception_ptr ep) {
         try {
             std::rethrow_exception(ep);
@@ -277,42 +262,43 @@ void kafka_upload_service::select(schema_ptr table, timeuuid last_seen_key) {
 }
 
 void kafka_upload_service::convert(schema_ptr schema, const cql3::untyped_result_set_row &row) {
-    std::cout << "pre-schema" << std::endl;
     //auto avro_schema = compose_value_schema_for(schema);
-    std::ifstream ifs("schema.json");
+    auto avro_schema = "{\"type\":\"record\",\"name\":\"value_schema\",\"namespace\":\"ks.t_scylla_cdc_log\",\"fields\":[{\"name\":\"cdc$stream_id\",\"type\":\"string\"},{\"name\":\"cdc$time\",\"type\":\"string\"},{\"name\":\"cdc$batch_seq_no\",\"type\":\"int\"},{\"name\":\"cdc$operation\",\"type\":\"string\"},{\"name\":\"cdc$ttl\",\"type\":\"long\"},{\"name\":\"ck\",\"type\":\"int\"},{\"name\":\"pk\",\"type\":\"int\"},{\"name\":\"v\",\"type\":\"int\"}]}";
     //std::cout << avro_schema << std::endl;
+    //std::ifstream ifs("cpx.json");
+    //auto avro_schema = "{\"type\":\"int\"}";
     avro::ValidSchema compiledSchema;
-    avro::compileJsonSchema(ifs, compiledSchema);
-    //avro::ValidSchema compiledSchema = avro::compileJsonSchemaFromString(avro_schema); // catch invalid schema
+    compiledSchema = avro::compileJsonSchemaFromString(avro_schema);
+    std::cout << compiledSchema.root()->type() << std::endl;
+//(void) sRecord;
+    //std::cout << sRecord.hasField("pk"); 
     avro::OutputStreamPtr out = avro::memoryOutputStream();
     avro::EncoderPtr e = avro::binaryEncoder();
     e->init(*out);
-    std::cout << "post-init" << std::endl;
     avro::GenericDatum datum(compiledSchema);
     std::cout << datum.type() << std::endl;
     if (datum.type() == avro::AVRO_RECORD) {
-        std::cout << "got-type" << std::endl;
         avro::GenericRecord &record = datum.value<avro::GenericRecord>();
-        std::cout << "got_record" << std::endl;
         auto columns = row.get_columns();
-        std::cout << "got-columns" << std::endl;
         for (auto &column : columns) {
-            std::cout << "col" << std::endl;
             auto name = column->name->to_string();
             std::cout << name << std::endl;
-            auto value = row.get_opt<bytes>(name);
-            if (value) {
-                record.field(name).value<bytes>() = value.value();
-            }
+            (void) record;
+         //   auto value = row.get_opt(name);
+         //   if (value) {
+         //       record.field(name).value() = value.value();
+         //   }
         }
     }
-    std::cout << "pre-encode" << std::endl;
+    /*std::cout << "pre-encode" << std::endl;
     avro::encode(*e,datum);
     std::cout << "post-encode" << std::endl;
     uint8_t* tmp;
     size_t length;
     out->next(&tmp, &length);
-    std::cout << tmp;
+
+
+    std::cout << tmp;*/
 }
 
 } // namespace cdc::kafka
