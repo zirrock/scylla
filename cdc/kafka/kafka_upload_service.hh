@@ -27,6 +27,8 @@
 #include <seastar/core/seastar.hh>
 #include <seastar/core/timer.hh>
 
+#include <kafka4seastar/producer/kafka_producer.hh>
+
 #include "utils/UUID.hh"
 #include "service/storage_proxy.hh"
 #include "service/client_state.hh"
@@ -53,6 +55,11 @@ class kafka_upload_service final {
 
     std::map<std::pair<sstring, sstring>, timeuuid> _last_seen_row_key;
 
+    std::unique_ptr<kafka4seastar::kafka_producer> _producer;
+
+    seastar::future<> _pending_queue;
+    seastar::future<> _producer_initialized;
+
     void on_timer();
 
     sstring compose_value_schema_for(schema_ptr schema);
@@ -71,23 +78,18 @@ class kafka_upload_service final {
 
     std::vector<schema_ptr> get_tables_with_cdc_enabled();
 
+    timeuuid do_kafka_replicate(schema_ptr table_schema, timeuuid last_seen);
+
     void arm_timer() {
         _timer.arm(seastar::lowres_clock::now() + std::chrono::seconds(10));
     }
+
 public:
-    kafka_upload_service(service::storage_proxy& proxy, auth::service& auth_service)
-        : _proxy(proxy)
-        , _timer([this] { on_timer(); })
-        , _auth_service(auth_service)
-        , _client_state(service::client_state::external_tag{}, _auth_service)
-    {
-        _proxy.set_kafka_upload_service(this);
-        arm_timer();
-    }
+    kafka_upload_service(service::storage_proxy& proxy, auth::service& auth_service);
 
     future<> stop() {
         _timer.cancel();
-        return make_ready_future<>();
+        return _pending_queue.discard_result();
     }
 
 };

@@ -41,6 +41,32 @@ namespace cdc::kafka {
 using seastar::sstring;
 using namespace std::chrono_literals;
 
+kafka_upload_service::kafka_upload_service(service::storage_proxy& proxy, auth::service& auth_service)
+: _proxy(proxy)
+, _timer([this] { on_timer(); })
+, _auth_service(auth_service)
+, _client_state(service::client_state::external_tag{}, _auth_service)
+, _pending_queue(seastar::make_ready_future<>())
+, _producer_initialized(seastar::make_ready_future<>())
+{
+    kafka4seastar::producer_properties properties;
+    properties._client_id = "cdc_replication_service";
+    properties._request_timeout = 10000;
+    properties._servers = {
+            {"172.20.0.3", 9092}
+    };
+
+    // TODO: What if doesn't connect to any broker? Handle exceptions
+    _producer = std::make_unique<kafka4seastar::kafka_producer>(std::move(properties));
+    _producer_initialized = _producer->init().handle_exception([] (auto exp) {
+        std::cout << "\n\nconnection exception\n\n";
+    });
+
+
+    _proxy.set_kafka_upload_service(this);
+    arm_timer();
+}
+
 std::vector<schema_ptr> kafka_upload_service::get_tables_with_cdc_enabled() {
     auto tables = _proxy.get_db().local().get_column_families();
 
@@ -56,7 +82,27 @@ std::vector<schema_ptr> kafka_upload_service::get_tables_with_cdc_enabled() {
     return tables_with_cdc;
 }
 
-timeuuid do_kafka_replicate(schema_ptr table_schema, timeuuid last_seen) {
+timeuuid kafka_upload_service::do_kafka_replicate(schema_ptr table_schema, timeuuid last_seen) {
+//    sstring topic = "topic";
+//    sstring key = "";
+//
+//    auto f = select(table_schema, last_seen).then([table_schema] (auto result) {
+//        size_t len;
+//        uint8_t* buffer;
+//        auto avro = convert(table_schema, result->);
+//        avro->next(&buffer, &len);
+//
+//        std::stringstream ss;
+//        for (size_t i = 0; i < len; i++) {
+//            ss << buffer[i];
+//        }
+//        std::string value = ss.str();
+//        std::cout << "value: " << value << "\n";
+//    });
+//    _pending_queue = _pending_queue.then([f = std::move(f)] () mutable {
+//       return std::move(f);
+//    });
+
     return last_seen;
 }
 
@@ -98,6 +144,22 @@ void kafka_upload_service::on_timer() {
                 if (op) {
                     if (op.value() == 2) {
                         auto data = convert(table, row); // send this data
+
+                        seastar::sstring value { data->begin(), data->end() };
+                        std::string sufix = "_scylla_cdc_log";
+                        seastar::sstring topic { table->cf_name().begin(), table->cf_name().end() - sufix.length() };
+
+                        std::cout << "\n\n\ntopic: " << topic << "\n";
+                        std::cout << "len: " << value.length() << "\nvalue: ";
+                        std::cout << value << "\n\n";
+
+                        auto f = _producer->produce(topic, value, value).handle_exception([] (auto ex) {
+//                        auto f = _producer->produce("topic", "", "KUPSKO").handle_exception([] (auto ex) {
+                            std::cout << "\n\nproblem producing: " << ex << "\n\n";
+                        });
+                        _pending_queue = _pending_queue.then([f = std::move(f)] () mutable {
+                            return std::move(f);
+                        });
                     }
                 }
             }
@@ -256,7 +318,6 @@ future<lw_shared_ptr<cql3::untyped_result_set>> kafka_upload_service::select(sch
     })*/
 }
 
-// TODO Piotr Wojtczak zmient to
 std::shared_ptr<std::vector<uint8_t>> kafka_upload_service::convert(schema_ptr schema, const cql3::untyped_result_set_row &row) {
     auto avro_schema = compose_value_schema_for(schema);
     //auto avro_schema = "{\"type\":\"record\",\"name\":\"value_schema\",\"namespace\":\"ks.t_scylla_cdc_log\",\"fields\":[{\"name\":\"cdc$stream_id\",\"type\":[\"null\",\"string\"]},{\"name\":\"cdc$time\",\"type\":[\"null\",\"string\"]},{\"name\":\"cdc$batch_seq_no\",\"type\":[\"null\",\"int\"]},{\"name\":\"cdc$operation\",\"type\":[\"null\",\"string\"]},{\"name\":\"cdc$ttl\",\"type\":[\"null\",\"long\"]},{\"name\":\"ck\",\"type\":[\"null\",\"int\"]},{\"name\":\"pk\",\"type\":[\"null\",\"int\"]},{\"name\":\"v\",\"type\":[\"null\",\"int\"]}]}";
@@ -271,6 +332,11 @@ std::shared_ptr<std::vector<uint8_t>> kafka_upload_service::convert(schema_ptr s
         auto columns = row.get_columns();
         for (auto &column : columns) {
             auto name = column->name->to_string();
+
+            if (name.compare(0, 4, "cdc$") == 0) {
+                continue;
+            }
+
             abstract_type::kind kind = column->type->get_kind();
             avro::GenericDatum &un = record.field(name);
             switch (kind) {
