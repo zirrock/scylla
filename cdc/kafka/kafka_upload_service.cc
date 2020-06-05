@@ -88,8 +88,21 @@ void kafka_upload_service::on_timer() {
         }
         // Create Kafka topic and schema
         auto last_seen = _last_seen_row_key[entry];
-        select(table, last_seen);
-        _last_seen_row_key[entry] = do_kafka_replicate(table, last_seen);
+        auto result = select(table, last_seen).then([this, table](lw_shared_ptr<cql3::untyped_result_set> results){
+            if (! results) {
+                std::cout << "empty_query_results" << std::endl;
+                return;
+            }
+            for (auto &row : *results) {
+                auto op = row.get_opt<int8_t>("cdc$operation");
+                if (op) {
+                    if (op.value() == 2) {
+                        auto data = convert(table, row); // send this data
+                    }
+                }
+            }
+        });
+        //_last_seen_row_key[entry] = do_kafka_replicate(table, last_seen);
     }
 }
 
@@ -188,17 +201,14 @@ sstring kafka_upload_service::compose_avro_schema(sstring avro_name, sstring avr
         return result;
  }
 
-void kafka_upload_service::select(schema_ptr table, timeuuid last_seen_key) {
+future<lw_shared_ptr<cql3::untyped_result_set>> kafka_upload_service::select(schema_ptr table, timeuuid last_seen_key) {
     std::vector<query::clustering_range> bounds;
-    auto ckp = clustering_key_prefix::from_single_value(*table, timeuuid_type->decompose(last_seen_key));
-    /*auto lckp = clustering_key_prefix::from_single_value(*table, timeuuid_type->decompose(last_seen_key));
+    auto lckp = clustering_key_prefix::from_single_value(*table, timeuuid_type->decompose(last_seen_key));
     auto lb = range_bound(lckp, false);
-    auto rb_timestamp = db_clock::now() - std::chrono::seconds(10);
+    auto rb_timestamp = std::chrono::system_clock::now() - std::chrono::seconds(10);
     auto rckp = clustering_key_prefix::from_single_value(*table, timeuuid_type->decompose(utils::UUID_gen::get_time_UUID(rb_timestamp)));
     auto rb = range_bound(rckp, true);
-    bounds.push_back(query::clustering_range::make(lb, rb));*/
-    auto b = range_bound(ckp, false);
-    bounds.push_back(query::clustering_range::make_starting_with(b));
+    bounds.push_back(query::clustering_range::make(lb, rb));
     auto selection = cql3::selection::selection::wildcard(table);
     query::column_id_vector static_columns, regular_columns;
     for (const column_definition& c : table->static_columns()) {
@@ -217,7 +227,7 @@ void kafka_upload_service::select(schema_ptr table, timeuuid last_seen_key) {
         partition_slice);
     dht::partition_range_vector partition_ranges;
     partition_ranges.push_back(query::full_partition_range);
-    auto results = _proxy.query(
+    return _proxy.query(
         table, 
         command, 
         std::move(partition_ranges), 
@@ -226,41 +236,27 @@ void kafka_upload_service::select(schema_ptr table, timeuuid last_seen_key) {
             timeout,
             empty_service_permit(),
             _client_state
-        )).then([table = table, partition_slice = std::move(partition_slice), selection = std::move(selection)] 
+        )
+    ).then([table = table, partition_slice = std::move(partition_slice), selection = std::move(selection)] 
         (service::storage_proxy::coordinator_query_result qr) -> lw_shared_ptr<cql3::untyped_result_set> {
-            cql3::selection::result_set_builder builder(*selection, gc_clock::now(), cql_serialization_format::latest());
-            query::result_view::consume(*qr.query_result, std::move(partition_slice), cql3::selection::result_set_builder::visitor(builder, *table, *selection));
-            auto result_set = builder.build();
-            if (!result_set || result_set->empty()) {
-                return {};
-            }
-            return make_lw_shared<cql3::untyped_result_set>(*result_set);
-        }).then([this, table](lw_shared_ptr<cql3::untyped_result_set> results){
-        if (! results) {
-            std::cout << "empty_query_results" << std::endl;
-            return;
+        cql3::selection::result_set_builder builder(*selection, gc_clock::now(), cql_serialization_format::latest());
+        query::result_view::consume(*qr.query_result, std::move(partition_slice), cql3::selection::result_set_builder::visitor(builder, *table, *selection));
+        auto result_set = builder.build();
+        if (!result_set || result_set->empty()) {
+            return {};
         }
-        for (auto &row : *results) {
-            auto op = row.get_opt<int8_t>("cdc$operation");
-            if (op) {
-                if (op.value() == 2) {
-                    convert(table, row);
-                }
-            }
-        }
-    }).handle_exception([] (std::exception_ptr ep) {
+        return make_lw_shared<cql3::untyped_result_set>(*result_set);
+    });
+    /*.handle_exception([] (std::exception_ptr ep) {
         try {
             std::rethrow_exception(ep);
         } catch (exceptions::unavailable_exception &e) {
             std::cout << "unavailable_exception" << std::endl;
         }
-      //  catch (...) {
-      //      std::cout << "different exception" << std::endl;
-      //  }
-    });
+    })*/
 }
 
-void kafka_upload_service::convert(schema_ptr schema, const cql3::untyped_result_set_row &row) {
+avro::OutputStreamPtr kafka_upload_service::convert(schema_ptr schema, const cql3::untyped_result_set_row &row) {
     auto avro_schema = compose_value_schema_for(schema);
     //auto avro_schema = "{\"type\":\"record\",\"name\":\"value_schema\",\"namespace\":\"ks.t_scylla_cdc_log\",\"fields\":[{\"name\":\"cdc$stream_id\",\"type\":[\"null\",\"string\"]},{\"name\":\"cdc$time\",\"type\":[\"null\",\"string\"]},{\"name\":\"cdc$batch_seq_no\",\"type\":[\"null\",\"int\"]},{\"name\":\"cdc$operation\",\"type\":[\"null\",\"string\"]},{\"name\":\"cdc$ttl\",\"type\":[\"null\",\"long\"]},{\"name\":\"ck\",\"type\":[\"null\",\"int\"]},{\"name\":\"pk\",\"type\":[\"null\",\"int\"]},{\"name\":\"v\",\"type\":[\"null\",\"int\"]}]}";
     avro::ValidSchema compiledSchema;
@@ -284,6 +280,7 @@ void kafka_upload_service::convert(schema_ptr schema, const cql3::untyped_result
                     auto value = row.get_opt<bool>(name);
                     if (value) {
                         un.selectBranch(1);
+                        std::cout << value.value() << std::endl;
                         un.value<bool>() = value.value();
                     }
                     break;
@@ -294,6 +291,7 @@ void kafka_upload_service::convert(schema_ptr schema, const cql3::untyped_result
                     auto value = row.get_opt<int64_t>(name);
                     if (value) {
                         un.selectBranch(1);
+                        std::cout << value.value() << std::endl;
                         un.value<int64_t>() = value.value();
                     }
                     break;
@@ -304,6 +302,7 @@ void kafka_upload_service::convert(schema_ptr schema, const cql3::untyped_result
                     auto value = row.get_opt<float>(name);
                     if (value) {
                         un.selectBranch(1);
+                        std::cout << value.value() << std::endl;
                         un.value<float>() = value.value();
                     }
                     break;
@@ -313,6 +312,7 @@ void kafka_upload_service::convert(schema_ptr schema, const cql3::untyped_result
                     auto value = row.get_opt<double>(name);
                     if (value) {
                         un.selectBranch(1);
+                        std::cout << value.value() << std::endl;
                         un.value<double>() = value.value();
                     }
                     break;
@@ -323,6 +323,7 @@ void kafka_upload_service::convert(schema_ptr schema, const cql3::untyped_result
                     auto value = row.get_opt<int32_t>(name);
                     if (value) {
                         un.selectBranch(1);
+                        std::cout << value.value() << std::endl;
                         un.value<int32_t>() = value.value();
                     }
                     break;
@@ -352,6 +353,11 @@ void kafka_upload_service::convert(schema_ptr schema, const cql3::untyped_result
                     auto value = row.get_opt<sstring>(name);
                     if (value) {
                         un.selectBranch(1);
+                        //std::cout << +value.value() << std::endl;
+                        for (size_t i = 0; i < value.value().size(); i++) {
+                            std::cout << +value.value()[i] << ' ';
+                        }
+                        std::cout << std::endl;
                         un.value<std::string>() = std::string(value.value());
                     }
                     break;
@@ -368,6 +374,7 @@ void kafka_upload_service::convert(schema_ptr schema, const cql3::untyped_result
         std::cout << +tmp[i] << ' ';
     }
     std::cout << std::endl;
+    return out;
 }
 
 } // namespace cdc::kafka

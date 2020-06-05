@@ -31,6 +31,8 @@
 #include "service/storage_proxy.hh"
 #include "service/client_state.hh"
 
+#include "avro/lang/c++/api/Encoder.hh"
+
 #include "cql3/untyped_result_set.hh"
 
 class schema;
@@ -63,9 +65,9 @@ class kafka_upload_service final {
 
     sstring compose_avro_schema(sstring avro_name, sstring avro_namespace, sstring avro_fields);
 
-    void select(schema_ptr table, timeuuid last_seen_key);
+    future<lw_shared_ptr<cql3::untyped_result_set>> select(schema_ptr table, timeuuid last_seen_key);
 
-    void convert(schema_ptr schema, const cql3::untyped_result_set_row &row);
+    avro::OutputStreamPtr convert(schema_ptr schema, const cql3::untyped_result_set_row &row);
 
     std::vector<schema_ptr> get_tables_with_cdc_enabled();
 
