@@ -67,7 +67,7 @@ class kafka_upload_service final {
 
     future<lw_shared_ptr<cql3::untyped_result_set>> select(schema_ptr table, timeuuid last_seen_key);
 
-    avro::OutputStreamPtr convert(schema_ptr schema, const cql3::untyped_result_set_row &row);
+    std::shared_ptr<std::vector<uint8_t>> convert(schema_ptr schema, const cql3::untyped_result_set_row &row);
 
     std::vector<schema_ptr> get_tables_with_cdc_enabled();
 

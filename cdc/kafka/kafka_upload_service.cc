@@ -256,13 +256,14 @@ future<lw_shared_ptr<cql3::untyped_result_set>> kafka_upload_service::select(sch
     })*/
 }
 
-avro::OutputStreamPtr kafka_upload_service::convert(schema_ptr schema, const cql3::untyped_result_set_row &row) {
+// TODO Piotr Wojtczak zmient to
+std::shared_ptr<std::vector<uint8_t>> kafka_upload_service::convert(schema_ptr schema, const cql3::untyped_result_set_row &row) {
     auto avro_schema = compose_value_schema_for(schema);
     //auto avro_schema = "{\"type\":\"record\",\"name\":\"value_schema\",\"namespace\":\"ks.t_scylla_cdc_log\",\"fields\":[{\"name\":\"cdc$stream_id\",\"type\":[\"null\",\"string\"]},{\"name\":\"cdc$time\",\"type\":[\"null\",\"string\"]},{\"name\":\"cdc$batch_seq_no\",\"type\":[\"null\",\"int\"]},{\"name\":\"cdc$operation\",\"type\":[\"null\",\"string\"]},{\"name\":\"cdc$ttl\",\"type\":[\"null\",\"long\"]},{\"name\":\"ck\",\"type\":[\"null\",\"int\"]},{\"name\":\"pk\",\"type\":[\"null\",\"int\"]},{\"name\":\"v\",\"type\":[\"null\",\"int\"]}]}";
     avro::ValidSchema compiledSchema;
     compiledSchema = avro::compileJsonSchemaFromString(avro_schema);
     avro::OutputStreamPtr out = avro::memoryOutputStream();
-    avro::EncoderPtr e = avro::binaryEncoder();
+    avro::EncoderPtr e = avro::validatingEncoder(compiledSchema, avro::binaryEncoder());
     e->init(*out);
     avro::GenericDatum datum(compiledSchema);
     if (datum.type() == avro::AVRO_RECORD) {
@@ -270,7 +271,6 @@ avro::OutputStreamPtr kafka_upload_service::convert(schema_ptr schema, const cql
         auto columns = row.get_columns();
         for (auto &column : columns) {
             auto name = column->name->to_string();
-            std::cout << name << std::endl;
             abstract_type::kind kind = column->type->get_kind();
             avro::GenericDatum &un = record.field(name);
             switch (kind) {
@@ -280,7 +280,6 @@ avro::OutputStreamPtr kafka_upload_service::convert(schema_ptr schema, const cql
                     auto value = row.get_opt<bool>(name);
                     if (value) {
                         un.selectBranch(1);
-                        std::cout << value.value() << std::endl;
                         un.value<bool>() = value.value();
                     }
                     break;
@@ -291,7 +290,6 @@ avro::OutputStreamPtr kafka_upload_service::convert(schema_ptr schema, const cql
                     auto value = row.get_opt<int64_t>(name);
                     if (value) {
                         un.selectBranch(1);
-                        std::cout << value.value() << std::endl;
                         un.value<int64_t>() = value.value();
                     }
                     break;
@@ -302,7 +300,6 @@ avro::OutputStreamPtr kafka_upload_service::convert(schema_ptr schema, const cql
                     auto value = row.get_opt<float>(name);
                     if (value) {
                         un.selectBranch(1);
-                        std::cout << value.value() << std::endl;
                         un.value<float>() = value.value();
                     }
                     break;
@@ -312,7 +309,6 @@ avro::OutputStreamPtr kafka_upload_service::convert(schema_ptr schema, const cql
                     auto value = row.get_opt<double>(name);
                     if (value) {
                         un.selectBranch(1);
-                        std::cout << value.value() << std::endl;
                         un.value<double>() = value.value();
                     }
                     break;
@@ -323,7 +319,6 @@ avro::OutputStreamPtr kafka_upload_service::convert(schema_ptr schema, const cql
                     auto value = row.get_opt<int32_t>(name);
                     if (value) {
                         un.selectBranch(1);
-                        std::cout << value.value() << std::endl;
                         un.value<int32_t>() = value.value();
                     }
                     break;
@@ -353,11 +348,6 @@ avro::OutputStreamPtr kafka_upload_service::convert(schema_ptr schema, const cql
                     auto value = row.get_opt<sstring>(name);
                     if (value) {
                         un.selectBranch(1);
-                        //std::cout << +value.value() << std::endl;
-                        for (size_t i = 0; i < value.value().size(); i++) {
-                            std::cout << +value.value()[i] << ' ';
-                        }
-                        std::cout << std::endl;
                         un.value<std::string>() = std::string(value.value());
                     }
                     break;
@@ -366,15 +356,12 @@ avro::OutputStreamPtr kafka_upload_service::convert(schema_ptr schema, const cql
         }
     }
     avro::encode(*e,datum);
-    uint8_t* tmp;
-    size_t length;
-    out->next(&tmp, &length);
-    std::cout << length << std::endl;
-    for (size_t i = 0; i < length; i++) {
-        std::cout << +tmp[i] << ' ';
-    }
-    std::cout << std::endl;
-    return out;
+    e->flush();
+    auto v = avro::snapshot(*out);
+
+    /* Write framing */
+    //schema->framing_write(res);
+    return v;
 }
 
 } // namespace cdc::kafka
